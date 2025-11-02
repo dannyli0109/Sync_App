@@ -52,6 +52,90 @@ body {
   gap: 12px;
 }
 
+.video-library {
+  background: rgba(18, 20, 32, 0.8);
+  border-radius: 16px;
+  padding: 16px 24px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.video-library-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.video-library-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.video-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.video-item {
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.22);
+  transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
+}
+
+.video-item.active {
+  border-color: rgba(129, 245, 255, 0.55);
+  background: rgba(108, 140, 255, 0.18);
+  transform: translateY(-1px);
+}
+
+.video-select {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  padding: 12px 16px;
+  background: transparent;
+  border: none;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.video-select:hover,
+.video-select:focus-visible {
+  outline: none;
+  background: rgba(108, 140, 255, 0.18);
+  box-shadow: none;
+  transform: none;
+}
+
+.video-select:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+  background: transparent;
+}
+
+.video-title {
+  font-weight: 600;
+  font-size: 1rem;
+  word-break: break-word;
+}
+
+.video-meta {
+  font-size: 0.82rem;
+  color: rgba(244, 244, 247, 0.65);
+}
+
 .room-controls {
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   align-items: end;
@@ -98,6 +182,49 @@ input[type="text"]:focus {
   border-color: rgba(255, 99, 132, 0.9) !important;
 }
 
+input[type="file"] {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px dashed rgba(255, 255, 255, 0.15);
+  background: rgba(0, 0, 0, 0.28);
+  color: rgba(244, 244, 247, 0.86);
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+input[type="file"]:hover {
+  border-color: rgba(129, 245, 255, 0.6);
+  background: rgba(18, 24, 42, 0.55);
+}
+
+input[type="file"]:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+input[type="file"]::file-selector-button {
+  margin-right: 12px;
+  padding: 8px 14px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(108, 140, 255, 0.35);
+  color: #f4f4f7;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s ease, transform 0.2s ease;
+}
+
+input[type="file"]::file-selector-button:hover {
+  background: rgba(108, 140, 255, 0.55);
+  transform: translateY(-1px);
+}
+
+input[type="file"]::file-selector-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+  transform: none;
+}
+
 @keyframes shake {
   0%,
   100% {
@@ -133,6 +260,23 @@ button:disabled {
   opacity: 0.45;
   box-shadow: none;
   transform: none;
+}
+
+.video-select {
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  color: inherit;
+}
+
+.video-select:hover,
+.video-select:focus-visible {
+  box-shadow: none;
+  transform: none;
+}
+
+.video-select:disabled {
+  background: transparent;
 }
 
 #copyLinkButton {
@@ -184,6 +328,13 @@ button:disabled {
   height: 100%;
 }
 
+.watch-video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: #000;
+}
+
 .player-placeholder {
   display: grid;
   place-items: center;
@@ -196,6 +347,29 @@ button:disabled {
   margin: 8px 0 0;
   font-size: 0.9rem;
   color: rgba(255, 255, 255, 0.6);
+}
+
+.hint[data-state="success"] {
+  color: rgba(129, 245, 255, 0.88);
+}
+
+.hint[data-state="error"] {
+  color: rgba(255, 132, 158, 0.9);
+}
+
+.player-container[data-viewer="locked"]::after {
+  content: 'Host controls playback';
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: rgba(0, 0, 0, 0.6);
+  padding: 6px 14px;
+  border-radius: 999px;
+  font-size: 0.82rem;
+  color: rgba(255, 255, 255, 0.82);
+  pointer-events: none;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
 }
 
 @media (max-width: 640px) {

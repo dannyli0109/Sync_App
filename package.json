@@ -1,7 +1,7 @@
 {
   "name": "sync_app",
   "version": "1.0.0",
-  "description": "Watch Bilibili together with synchronized playback",
+  "description": "Upload videos and watch together with synchronized playback",
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
@@ -16,6 +16,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "ali-oss": "^6.21.0",
     "express": "^5.1.0",
     "nanoid": "^5.1.6",
     "socket.io": "^4.8.1"

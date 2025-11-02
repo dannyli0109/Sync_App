@@ -2,6 +2,7 @@ const path = require('path');
 const express = require('express');
 const { createServer } = require('http');
 const { Server } = require('socket.io');
+const OSS = require('ali-oss');
 const { nanoid } = require('nanoid');
 
 const app = express();
@@ -9,8 +10,38 @@ const server = createServer(app);
 const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
+const MAX_UPLOAD_SIZE_BYTES = Number(
+  process.env.MAX_UPLOAD_SIZE_BYTES || 1024 * 1024 * 1024,
+);
+const OSS_UPLOAD_EXPIRY_SECONDS = Math.max(
+  Number(process.env.OSS_UPLOAD_EXPIRY_SECONDS) || 120,
+  30,
+);
+const OSS_PLAYBACK_EXPIRY_SECONDS = Math.max(
+  Number(process.env.OSS_PLAYBACK_EXPIRY_SECONDS) || 3600,
+  60,
+);
+const OSS_VIDEO_PREFIX = ensureTrailingSlash(
+  process.env.OSS_VIDEO_PREFIX || 'videos/',
+);
+
+const ossConfig = {
+  accessKeyId: process.env.OSS_ACCESS_KEY_ID,
+  accessKeySecret: process.env.OSS_ACCESS_KEY_SECRET,
+  bucket: process.env.OSS_BUCKET,
+  region: process.env.OSS_REGION,
+  endpoint: process.env.OSS_ENDPOINT,
+  secure: process.env.OSS_SECURE === 'false' ? false : true,
+};
+console.log('OSS Config:', ossConfig);
+
+let ossClient = null;
 
 const rooms = new Map();
+const videos = new Map();
+
+app.use(express.json({ limit: '1mb' }));
+app.use(express.static(path.join(__dirname, 'public')));
 
 function ensureRoom(roomId) {
   let room = rooms.get(roomId);
@@ -35,43 +66,411 @@ function setHost(room, newHostId) {
   room.hostId = newHostId;
 }
 
-app.use(express.json());
+function ensureTrailingSlash(value) {
+  if (!value) return '';
+  const trimmed = value.replace(/^[\\/]+/, '').replace(/[\\/]+$/, '');
+  return trimmed ? `${trimmed}/` : '';
+}
 
-app.get('/api/bili/ticket', async (req, res) => {
+function isOssConfigured() {
+  return Boolean(
+    ossConfig.accessKeyId &&
+    ossConfig.accessKeySecret &&
+    ossConfig.bucket &&
+    (ossConfig.region || ossConfig.endpoint),
+  );
+}
+
+function getOssClient() {
+  if (!isOssConfigured()) {
+    return null;
+  }
+  if (!ossClient) {
+    const baseConfig = {
+      accessKeyId: ossConfig.accessKeyId,
+      accessKeySecret: ossConfig.accessKeySecret,
+      bucket: ossConfig.bucket,
+      secure: ossConfig.secure,
+    };
+    if (ossConfig.endpoint) {
+      baseConfig.endpoint = ossConfig.endpoint;
+    } else {
+      baseConfig.region = ossConfig.region;
+    }
+    ossClient = new OSS(baseConfig);
+  }
+  return ossClient;
+}
+
+function respondOssNotConfigured(res) {
+  res.status(503).json({
+    error: 'OssNotConfigured',
+    message:
+      'Aliyun OSS credentials are missing. Set OSS_ACCESS_KEY_ID, OSS_ACCESS_KEY_SECRET, OSS_BUCKET, and OSS_REGION or OSS_ENDPOINT.',
+  });
+}
+
+function sanitizeFilename(name) {
+  if (!name || typeof name !== 'string') {
+    return 'video';
+  }
+  return name
+    .replace(/[\u0000-\u001f<>:"/\\|?*]/g, '_')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(-180) || 'video';
+}
+
+function buildObjectKey(videoId, originalName) {
+  const cleaned = sanitizeFilename(originalName);
+  const encoded = encodeURIComponent(cleaned);
+  return `${OSS_VIDEO_PREFIX}${videoId}/${encoded}`;
+}
+
+function parseObjectKey(objectKey) {
+  if (!objectKey || !objectKey.startsWith(OSS_VIDEO_PREFIX)) {
+    return null;
+  }
+  const remainder = objectKey.slice(OSS_VIDEO_PREFIX.length);
+  const slashIndex = remainder.indexOf('/');
+  if (slashIndex <= 0) {
+    return null;
+  }
+  const videoId = remainder.slice(0, slashIndex);
+  const encodedName = remainder.slice(slashIndex + 1);
+  if (!encodedName) {
+    return null;
+  }
+  let originalName = encodedName;
   try {
-    const upstreamUrl = new URL(
-      'https://api.bilibili.com/bapis/bilibili.api.ticket.v1.Ticket/GenWebTicket',
-    );
+    originalName = decodeURIComponent(encodedName);
+  } catch {
+    // Fallback to encodedName if decoding fails.
+  }
+  return {
+    videoId,
+    originalName,
+    objectKey,
+  };
+}
 
-    Object.entries(req.query).forEach(([key, value]) => {
-      if (Array.isArray(value)) {
-        value.forEach((entry) => upstreamUrl.searchParams.append(key, entry));
-      } else if (value != null) {
-        upstreamUrl.searchParams.append(key, value);
+function normalizeEtag(etag) {
+  if (!etag) return null;
+  return etag.replace(/^"+|"+$/g, '');
+}
+
+async function createPlaybackUrl(objectKey) {
+  const client = getOssClient();
+  if (!client) {
+    throw new Error('OSS client not configured');
+  }
+  const expiresAt = Date.now() + OSS_PLAYBACK_EXPIRY_SECONDS * 1000;
+  const url = client.signatureUrl(objectKey, {
+    method: 'GET',
+    expires: OSS_PLAYBACK_EXPIRY_SECONDS,
+  });
+  return { url, expiresAt };
+}
+
+async function ensurePlaybackUrl(state) {
+  if (!state || !state.ossKey) {
+    return state;
+  }
+  const now = Date.now();
+  const bufferMs = 60 * 1000;
+  if (!state.playbackExpiresAt || now >= state.playbackExpiresAt - bufferMs) {
+    try {
+      const playback = await createPlaybackUrl(state.ossKey);
+      state.videoUrl = playback.url;
+      state.playbackExpiresAt = playback.expiresAt;
+    } catch (error) {
+      console.error('Failed to refresh playback URL', error);
+    }
+  }
+  return state;
+}
+
+function presentState(state) {
+  if (!state) return null;
+  const {
+    ossKey: _ossKey,
+    playbackExpiresAt: _playbackExpiresAt,
+    ...publicState
+  } = state;
+  return publicState;
+}
+
+async function prepareStateForClient(state) {
+  if (!state) return null;
+  await ensurePlaybackUrl(state);
+  return presentState(state);
+}
+
+async function resolveVideoRecord(videoId) {
+  if (!videoId) {
+    return null;
+  }
+
+  const cached = videos.get(videoId);
+  if (cached && cached.status === 'ready') {
+    return cached;
+  }
+
+  const client = getOssClient();
+  if (!client) {
+    return null;
+  }
+
+  let objectKey = cached && cached.objectKey;
+  let originalName = cached && cached.originalName;
+
+  try {
+    if (!objectKey) {
+      const prefix = `${OSS_VIDEO_PREFIX}${videoId}/`;
+      const listResponse = await client.list({
+        prefix,
+        'max-keys': 1,
+      });
+      const [object] = listResponse.objects || [];
+      if (!object || !object.name) {
+        return null;
       }
-    });
-
-    const upstreamResponse = await fetch(upstreamUrl, {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0 Safari/537.36',
-        ...(req.headers.cookie ? { cookie: req.headers.cookie } : {}),
-      },
-    });
-
-    const buffer = Buffer.from(await upstreamResponse.arrayBuffer());
-    const contentType = upstreamResponse.headers.get('content-type');
-
-    if (contentType) {
-      res.set('Content-Type', contentType);
+      objectKey = object.name;
+      const parsed = parseObjectKey(objectKey);
+      if (!parsed) {
+        return null;
+      }
+      originalName = parsed.originalName;
     }
 
-    res.status(upstreamResponse.status).send(buffer);
+    const headResponse = await client.head(objectKey);
+    const headers = (headResponse && headResponse.res && headResponse.res.headers) || {};
+    const record = {
+      id: videoId,
+      objectKey,
+      originalName: originalName || sanitizeFilename('video'),
+      mimeType: headers['content-type'] || (cached && cached.mimeType) || 'application/octet-stream',
+      size: Number(headers['content-length'] || (cached && cached.size) || 0),
+      lastModified: new Date(
+        headers['last-modified'] || (cached && cached.lastModified) || Date.now(),
+      ).getTime(),
+      etag: normalizeEtag(headers.etag || (cached && cached.etag)),
+      status: 'ready',
+      uploadedAt: Date.now(),
+    };
+    videos.set(videoId, record);
+    return record;
   } catch (error) {
-    console.error('Failed to proxy Bilibili ticket request', error);
-    res.status(502).json({
-      error: 'ProxyError',
-      message: 'Unable to reach Bilibili ticket endpoint.',
+    if (error && error.code === 'NoSuchKey') {
+      return null;
+    }
+    console.error(`Failed to resolve video ${videoId} from OSS`, error);
+    return null;
+  }
+}
+
+app.post('/api/videos/presign', async (req, res) => {
+  if (!isOssConfigured()) {
+    return respondOssNotConfigured(res);
+  }
+
+  const { originalName, contentType, sizeBytes } = req.body || {};
+
+  if (sizeBytes && Number(sizeBytes) > MAX_UPLOAD_SIZE_BYTES) {
+    return res.status(413).json({
+      error: 'UploadTooLarge',
+      message: 'The video exceeds the configured upload size limit.',
+    });
+  }
+
+  const safeName = sanitizeFilename(originalName || 'video');
+  const mimeType = typeof contentType === 'string' && contentType ? contentType : 'application/octet-stream';
+  const size = Number(sizeBytes) || null;
+
+  const client = getOssClient();
+  if (!client) {
+    return respondOssNotConfigured(res);
+  }
+
+  const videoId = nanoid(12);
+  const objectKey = buildObjectKey(videoId, safeName);
+  const headers = {};
+  if (mimeType) {
+    headers['Content-Type'] = mimeType;
+  }
+
+  let uploadUrl;
+  try {
+    uploadUrl = client.signatureUrl(objectKey, {
+      method: 'PUT',
+      expires: OSS_UPLOAD_EXPIRY_SECONDS,
+      headers,
+    });
+  } catch (error) {
+    console.error('Failed to generate OSS upload signature', error);
+    return res.status(500).json({
+      error: 'SignatureFailed',
+      message: 'Failed to generate upload signature.',
+    });
+  }
+
+  const expiresAt = new Date(Date.now() + OSS_UPLOAD_EXPIRY_SECONDS * 1000).toISOString();
+
+  videos.set(videoId, {
+    id: videoId,
+    objectKey,
+    originalName: safeName,
+    mimeType,
+    size,
+    createdAt: Date.now(),
+    status: 'pending',
+  });
+
+  res.json({
+    videoId,
+    objectKey,
+    uploadUrl,
+    expiresAt,
+    headers,
+  });
+});
+
+app.post('/api/videos/:id/complete', async (req, res) => {
+  if (!isOssConfigured()) {
+    return respondOssNotConfigured(res);
+  }
+
+  const { id } = req.params;
+  if (!id || typeof id !== 'string') {
+    return res.status(400).json({
+      error: 'InvalidVideoId',
+      message: 'Video ID is required.',
+    });
+  }
+
+  const record = await resolveVideoRecord(id);
+  if (!record) {
+    return res.status(404).json({
+      error: 'VideoNotFound',
+      message: 'Uploaded video not found in OSS.',
+    });
+  }
+
+  videos.set(id, record);
+
+  try {
+    const playback = await createPlaybackUrl(record.objectKey);
+    res.json({
+      videoId: record.id,
+      videoUrl: playback.url,
+      expiresAt: new Date(playback.expiresAt).toISOString(),
+      originalName: record.originalName,
+      size: record.size,
+      mimeType: record.mimeType,
+    });
+  } catch (error) {
+    console.error('Failed to generate playback URL during completion', error);
+    res.status(500).json({
+      error: 'PlaybackUrlFailed',
+      message: 'Failed to generate playback URL.',
+    });
+  }
+});
+
+app.get('/api/videos', async (req, res) => {
+  if (!isOssConfigured()) {
+    return res.json({ items: [] });
+  }
+
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+  const client = getOssClient();
+  const items = [];
+  let marker;
+
+  try {
+    while (items.length < limit) {
+      const response = await client.list({
+        prefix: OSS_VIDEO_PREFIX,
+        marker,
+        'max-keys': Math.min(limit - items.length, 200),
+      });
+      const objects = response.objects || [];
+      for (const object of objects) {
+        if (!object || !object.name || object.name.endsWith('/')) {
+          continue;
+        }
+        const parsed = parseObjectKey(object.name);
+        if (!parsed) {
+          continue;
+        }
+        const cached = videos.get(parsed.videoId);
+        const item = cached && cached.status === 'ready'
+          ? cached
+          : {
+            id: parsed.videoId,
+            objectKey: object.name,
+            originalName: parsed.originalName,
+            size: Number(object.size) || null,
+            lastModified: new Date(object.lastModified || Date.now()).getTime(),
+            mimeType: (cached && cached.mimeType) || 'application/octet-stream',
+            status: 'ready',
+          };
+        videos.set(parsed.videoId, item);
+        items.push({
+          videoId: item.id,
+          originalName: item.originalName,
+          size: item.size,
+          lastModified: item.lastModified,
+        });
+        if (items.length >= limit) {
+          break;
+        }
+      }
+      if (!response.isTruncated || items.length >= limit) {
+        break;
+      }
+      marker = response.nextMarker;
+    }
+  } catch (error) {
+    console.error('Failed to list videos from OSS', error);
+    return res.status(500).json({
+      error: 'ListFailed',
+      message: 'Failed to list videos from OSS.',
+    });
+  }
+
+  res.json({ items });
+});
+
+app.get('/api/videos/:id/playback', async (req, res) => {
+  if (!isOssConfigured()) {
+    return respondOssNotConfigured(res);
+  }
+
+  const { id } = req.params;
+  const record = await resolveVideoRecord(id);
+  if (!record) {
+    return res.status(404).json({
+      error: 'VideoNotFound',
+      message: 'Video not found.',
+    });
+  }
+
+  try {
+    const playback = await createPlaybackUrl(record.objectKey);
+    res.json({
+      videoId: record.id,
+      videoUrl: playback.url,
+      expiresAt: new Date(playback.expiresAt).toISOString(),
+      originalName: record.originalName,
+      size: record.size,
+      mimeType: record.mimeType,
+    });
+  } catch (error) {
+    console.error('Failed to generate playback URL', error);
+    res.status(500).json({
+      error: 'PlaybackUrlFailed',
+      message: 'Failed to generate playback URL.',
     });
   }
 });
@@ -81,15 +480,17 @@ app.get('/api/rooms/new', (req, res) => {
   res.json({ roomId });
 });
 
-app.use(express.static(path.join(__dirname, 'public')));
-
 io.on('connection', (socket) => {
-  socket.on('join-room', ({ roomId, displayName }) => {
+  socket.on('join-room', async ({ roomId, displayName }) => {
     if (!roomId || typeof roomId !== 'string') {
       return;
     }
 
     const trimmedId = roomId.trim();
+    if (!trimmedId) {
+      return;
+    }
+
     const room = ensureRoom(trimmedId);
 
     socket.data.roomId = trimmedId;
@@ -102,10 +503,12 @@ io.on('connection', (socket) => {
       setHost(room, socket.id);
     }
 
+    const state = await prepareStateForClient(room.state);
+
     socket.emit('room-init', {
       roomId: trimmedId,
       hostId: room.hostId,
-      state: room.state,
+      state,
       participantId: socket.id,
     });
 
@@ -115,29 +518,43 @@ io.on('connection', (socket) => {
     });
   });
 
-  socket.on('set-video', ({ bvid, startTime }) => {
+  socket.on('set-video', async ({ videoId, startTime }) => {
     const room = getRoomForSocket(socket);
     if (!room || room.hostId !== socket.id) {
       return;
     }
 
-    if (!bvid || typeof bvid !== 'string') {
+    if (!videoId || typeof videoId !== 'string') {
       return;
     }
 
-    const now = Date.now();
-    room.state = {
-      bvid: bvid.trim(),
-      time: typeof startTime === 'number' ? Math.max(startTime, 0) : 0,
-      paused: true,
-      playbackRate: 1,
-      updatedAt: now,
-    };
+    const record = await resolveVideoRecord(videoId);
+    if (!record) {
+      return;
+    }
 
-    io.to(socket.data.roomId).emit('load-video', room.state);
+    try {
+      const playback = await createPlaybackUrl(record.objectKey);
+      const now = Date.now();
+      room.state = {
+        videoId: record.id,
+        videoUrl: playback.url,
+        videoName: record.originalName,
+        size: record.size,
+        time: typeof startTime === 'number' ? Math.max(startTime, 0) : 0,
+        paused: true,
+        playbackRate: 1,
+        updatedAt: now,
+        ossKey: record.objectKey,
+        playbackExpiresAt: playback.expiresAt,
+      };
+      io.to(socket.data.roomId).emit('load-video', presentState(room.state));
+    } catch (error) {
+      console.error('Failed to set video for room', error);
+    }
   });
 
-  socket.on('host-update', (payload) => {
+  socket.on('host-update', async (payload) => {
     const room = getRoomForSocket(socket);
     if (!room || room.hostId !== socket.id || !room.state) {
       return;
@@ -150,12 +567,14 @@ io.on('connection', (socket) => {
     };
 
     room.state = nextState;
-    socket.to(socket.data.roomId).emit('sync-state', nextState);
+    socket.to(socket.data.roomId).emit('sync-state', presentState(nextState));
   });
 
-  socket.on('request-host', () => {
+  socket.on('request-host', async () => {
     const room = getRoomForSocket(socket);
-    if (!room) return;
+    if (!room) {
+      return;
+    }
 
     if (room.hostId === socket.id) {
       socket.emit('host-changed', { hostId: room.hostId });
@@ -168,7 +587,8 @@ io.on('connection', (socket) => {
     });
 
     if (room.state) {
-      socket.emit('sync-state', room.state);
+      await ensurePlaybackUrl(room.state);
+      socket.emit('sync-state', presentState(room.state));
     }
   });
 
@@ -188,6 +608,14 @@ io.on('connection', (socket) => {
         io.to(socket.data.roomId).emit('host-changed', {
           hostId: room.hostId,
         });
+        if (room.state) {
+          ensurePlaybackUrl(room.state).then(() => {
+            io.to(socket.data.roomId).emit(
+              'sync-state',
+              presentState(room.state),
+            );
+          });
+        }
       } else {
         rooms.delete(socket.data.roomId);
       }

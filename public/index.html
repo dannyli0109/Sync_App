@@ -3,13 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Bilibili Sync Watch</title>
+    <title>Sync Watch</title>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
     <header class="app-header">
-      <h1>Bilibili Sync Watch</h1>
-      <p>Share a room link, load a Bilibili video, and watch in sync.</p>
+      <h1>Sync Watch</h1>
+      <p>Share a room link, upload a video, and watch together in sync.</p>
     </header>
 
     <main class="app-main">
@@ -47,18 +47,28 @@
       </section>
 
       <section class="video-controls" id="videoControls" hidden>
-        <label for="videoInput">Bilibili link or BV ID</label>
-        <div class="inline">
-          <input type="text" id="videoInput" placeholder="https://www.bilibili.com/video/BV..." />
-          <button id="loadVideoButton">Load video</button>
+        <label for="videoFileInput">Upload video (mp4, webm, mov…)</label>
+        <div class="inline file-input">
+          <input type="file" id="videoFileInput" accept="video/*" />
+          <button id="uploadVideoButton">Upload &amp; Share</button>
         </div>
-        <p class="hint" id="hostHint">Only the host can load or control playback.</p>
+        <p class="hint" id="videoStatus" data-state="info">No video loaded yet.</p>
+        <p class="hint" id="hostHint">Only the host can upload and control playback.</p>
+      </section>
+
+      <section class="video-library" id="videoLibrary" hidden>
+        <div class="video-library-header">
+          <h2>Video Library</h2>
+          <button id="refreshLibraryButton" type="button">Refresh</button>
+        </div>
+        <p class="hint" id="libraryStatus" data-state="info">Loading videos...</p>
+        <ul class="video-list" id="videoList"></ul>
       </section>
 
       <section class="player-section">
         <div id="playerContainer" class="player-container">
           <div class="player-placeholder">
-            <p>Select or create a room to get started.</p>
+            <p>Select or create a room, then upload a video to get started.</p>
           </div>
         </div>
       </section>

@@ -13,3 +13,4 @@ pnpm-debug.log*
 .env.*
 .pm2
 package-lock.json
+uploads/
