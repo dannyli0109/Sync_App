@@ -1,0 +1,217 @@
+:root {
+  color-scheme: light dark;
+  font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+  background: #0f0f10;
+  color: #f4f4f7;
+  line-height: 1.5;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: linear-gradient(180deg, #171925 0%, #0e0f17 100%);
+}
+
+.app-header {
+  padding: 24px;
+  text-align: center;
+  background: rgba(15, 16, 24, 0.85);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+.app-header h1 {
+  margin: 0;
+  font-size: 2rem;
+}
+
+.app-header p {
+  margin: 8px 0 0;
+  color: rgba(255, 255, 255, 0.72);
+}
+
+.app-main {
+  flex: 1;
+  width: min(960px, 94vw);
+  margin: 24px auto 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.room-controls,
+.room-info,
+.video-controls {
+  background: rgba(18, 20, 32, 0.8);
+  border-radius: 16px;
+  padding: 16px 24px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
+  display: grid;
+  gap: 12px;
+}
+
+.room-controls {
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  align-items: end;
+}
+
+.room-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.room-form .inline {
+  display: flex;
+  gap: 8px;
+}
+
+.room-form label,
+.room-form .label {
+  font-weight: 600;
+}
+
+.room-info {
+  display: grid;
+  gap: 8px;
+}
+
+input[type="text"] {
+  padding: 10px 14px;
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.09);
+  background: rgba(0, 0, 0, 0.35);
+  color: inherit;
+  transition: border-color 0.2s ease, background 0.2s ease;
+}
+
+input[type="text"]:focus {
+  outline: none;
+  border-color: rgba(121, 143, 255, 0.85);
+  background: rgba(15, 18, 40, 0.6);
+}
+
+.input-error {
+  animation: shake 0.2s ease-in-out 2;
+  border-color: rgba(255, 99, 132, 0.9) !important;
+}
+
+@keyframes shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-4px);
+  }
+  75% {
+    transform: translateX(4px);
+  }
+}
+
+button {
+  padding: 10px 16px;
+  border-radius: 10px;
+  border: none;
+  cursor: pointer;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: #0e101a;
+  background: linear-gradient(135deg, #81f5ff 0%, #6c8cff 100%);
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 22px rgba(108, 140, 255, 0.35);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+  box-shadow: none;
+  transform: none;
+}
+
+#copyLinkButton {
+  background: rgba(255, 255, 255, 0.12);
+  color: #f4f4f7;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+#copyLinkButton:hover {
+  box-shadow: none;
+  transform: none;
+  background: rgba(255, 255, 255, 0.18);
+}
+
+#takeHostButton {
+  margin-left: 12px;
+  background: rgba(108, 140, 255, 0.18);
+  color: #d8e0ff;
+  border: 1px solid rgba(108, 140, 255, 0.4);
+}
+
+#takeHostButton:hover {
+  transform: none;
+  box-shadow: none;
+  background: rgba(108, 140, 255, 0.28);
+}
+
+.player-section {
+  background: rgba(14, 16, 28, 0.7);
+  border-radius: 18px;
+  padding: 18px;
+  box-shadow: 0 30px 40px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(12px);
+}
+
+.player-container {
+  position: relative;
+  width: 100%;
+  padding-top: 56.25%;
+  border-radius: 12px;
+  overflow: hidden;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.player-container > * {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.player-placeholder {
+  display: grid;
+  place-items: center;
+  text-align: center;
+  color: rgba(244, 244, 247, 0.6);
+  font-size: 1.05rem;
+}
+
+.hint {
+  margin: 8px 0 0;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+@media (max-width: 640px) {
+  .app-header h1 {
+    font-size: 1.6rem;
+  }
+
+  .room-controls {
+    grid-template-columns: 1fr;
+  }
+
+  .room-form .inline {
+    flex-direction: column;
+  }
+
+  .player-section {
+    padding: 12px;
+  }
+}

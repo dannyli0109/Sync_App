@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Bilibili Sync Watch</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="app-header">
+      <h1>Bilibili Sync Watch</h1>
+      <p>Share a room link, load a Bilibili video, and watch in sync.</p>
+    </header>
+
+    <main class="app-main">
+      <section class="room-controls">
+        <div class="room-form">
+          <label for="displayName">Display name</label>
+          <input type="text" id="displayName" maxlength="24" placeholder="Guest" />
+        </div>
+        <div class="room-form join">
+          <label for="roomIdInput">Join existing room</label>
+          <div class="inline">
+            <input type="text" id="roomIdInput" placeholder="Enter room ID" />
+            <button id="joinRoomButton">Join</button>
+          </div>
+        </div>
+        <div class="room-form create">
+          <span class="label">Need a room?</span>
+          <button id="createRoomButton">Create room</button>
+        </div>
+      </section>
+
+      <section class="room-info" id="roomInfo" hidden>
+        <div>
+          <strong>Room:</strong> <span id="roomIdLabel"></span>
+        </div>
+        <div>
+          <strong>Your role:</strong> <span id="roleLabel">Viewer</span>
+          <button id="takeHostButton">Take control</button>
+        </div>
+        <div>
+          <strong>Share link:</strong>
+          <span id="shareLink"></span>
+          <button id="copyLinkButton">Copy</button>
+        </div>
+      </section>
+
+      <section class="video-controls" id="videoControls" hidden>
+        <label for="videoInput">Bilibili link or BV ID</label>
+        <div class="inline">
+          <input type="text" id="videoInput" placeholder="https://www.bilibili.com/video/BV..." />
+          <button id="loadVideoButton">Load video</button>
+        </div>
+        <p class="hint" id="hostHint">Only the host can load or control playback.</p>
+      </section>
+
+      <section class="player-section">
+        <div id="playerContainer" class="player-container">
+          <div class="player-placeholder">
+            <p>Select or create a room to get started.</p>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>
