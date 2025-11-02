@@ -17,7 +17,7 @@ const io = new Server(server);
 
 const PORT = process.env.PORT || 3000;
 const MAX_UPLOAD_SIZE_BYTES = Number(
-  process.env.MAX_UPLOAD_SIZE_BYTES || 1024 * 1024 * 1024,
+  process.env.MAX_UPLOAD_SIZE_BYTES || 1024 * 1024 * 1024 * 10,
 );
 const MIN_PART_SIZE_BYTES = 5 * 1024 * 1024;
 const DEFAULT_PART_SIZE_BYTES = Math.max(
@@ -115,9 +115,9 @@ function extractRegionFromEndpoint(endpoint) {
 function isOssConfigured() {
   return Boolean(
     ossConfig.accessKeyId &&
-      ossConfig.accessKeySecret &&
-      ossConfig.bucket &&
-      (ossConfig.region || ossConfig.endpoint),
+    ossConfig.accessKeySecret &&
+    ossConfig.bucket &&
+    (ossConfig.region || ossConfig.endpoint),
   );
 }
 
@@ -145,12 +145,12 @@ function getOssClient() {
 function isMpsConfigured() {
   return Boolean(
     ossConfig.accessKeyId &&
-      ossConfig.accessKeySecret &&
-      mpsConfig.regionId &&
-      mpsConfig.pipelineId &&
-      mpsConfig.templateId &&
-      mpsConfig.outputBucket &&
-      mpsConfig.outputLocation,
+    ossConfig.accessKeySecret &&
+    mpsConfig.regionId &&
+    mpsConfig.pipelineId &&
+    mpsConfig.templateId &&
+    mpsConfig.outputBucket &&
+    mpsConfig.outputLocation,
   );
 }
 
@@ -564,17 +564,17 @@ app.post('/api/videos/multipart/init', async (req, res) => {
       record.transcodeTargetKey = buildTranscodeObjectKey(record);
     }
 
-  videos.set(videoId, record);
+    videos.set(videoId, record);
 
-  res.json({
-    videoId,
-    uploadId,
-    objectKey,
-    partSizeBytes: partSize,
-    maxPartCount: MAX_PART_COUNT,
-    mimeType: record.mimeType,
-    expiresAt: new Date(Date.now() + PART_UPLOAD_EXPIRY_SECONDS * 1000).toISOString(),
-  });
+    res.json({
+      videoId,
+      uploadId,
+      objectKey,
+      partSizeBytes: partSize,
+      maxPartCount: MAX_PART_COUNT,
+      mimeType: record.mimeType,
+      expiresAt: new Date(Date.now() + PART_UPLOAD_EXPIRY_SECONDS * 1000).toISOString(),
+    });
   } catch (error) {
     console.error('Failed to initialise multipart upload', error);
     res.status(500).json({
