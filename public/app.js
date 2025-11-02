@@ -19,6 +19,9 @@ const elements = {
   refreshLibraryButton: document.getElementById('refreshLibraryButton'),
   videoList: document.getElementById('videoList'),
   libraryStatus: document.getElementById('libraryStatus'),
+  uploadProgress: document.getElementById('uploadProgress'),
+  uploadProgressFill: document.getElementById('uploadProgressFill'),
+  uploadProgressLabel: document.getElementById('uploadProgressLabel'),
 };
 
 const socket = io();
@@ -55,6 +58,25 @@ function updateUrlForRoom(roomId) {
 
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
+}
+
+function formatVideoStatusLabel(status) {
+  if (!status) return '';
+  const normalized = String(status).toLowerCase();
+  switch (normalized) {
+    case 'ready':
+      return 'Ready';
+    case 'processing':
+      return 'Processing';
+    case 'uploaded':
+      return 'Uploaded';
+    case 'uploading':
+      return 'Uploading';
+    case 'error':
+      return 'Error';
+    default:
+      return status;
+  }
 }
 
 function updateRoomUi(roomId) {
@@ -208,6 +230,7 @@ function emitHostState(reason, { throttle = false } = {}) {
 function applyRemoteState(state) {
   if (!state || awaitingVideoReady) return;
 
+  const previousState = lastSyncedState;
   lastSyncedState = state;
 
   if (!currentVideoEl || (state.videoId && state.videoId !== currentVideoId)) {
@@ -256,6 +279,23 @@ function applyRemoteState(state) {
   }
 
   updateVideoAccess();
+
+  const statusChanged =
+    state.status !== (previousState && previousState.status) ||
+    state.transcodeStatus !== (previousState && previousState.transcodeStatus);
+  if (statusChanged) {
+    const label = state.videoName || 'Shared video';
+    const statusLabel = formatVideoStatusLabel(state.status || state.transcodeStatus);
+    if (statusLabel) {
+      const tone =
+        state.status === 'error'
+          ? 'error'
+          : state.status === 'ready'
+          ? 'success'
+          : 'info';
+      showVideoStatus(`Now playing: ${label} (${statusLabel})`, tone);
+    }
+  }
 
   window.setTimeout(() => {
     if (!paused && Math.abs(currentVideoEl.playbackRate - baseRate) > BASE_RATE_EPSILON) {
@@ -326,7 +366,18 @@ function loadVideo(state, options = {}) {
   updateVideoAccess();
 
   const label = state.videoName || 'Shared video';
-  showVideoStatus(`Now playing: ${label}`, 'success');
+  const statusLabel = formatVideoStatusLabel(state.status || state.transcodeStatus);
+  const tone =
+    state.status === 'error'
+      ? 'error'
+      : state.status === 'ready'
+      ? 'success'
+      : 'info';
+  if (statusLabel) {
+    showVideoStatus(`Now playing: ${label} (${statusLabel})`, tone);
+  } else {
+    showVideoStatus(`Now playing: ${label}`, 'success');
+  }
 }
 
 function joinRoom(roomId) {
@@ -348,6 +399,46 @@ function showVideoStatus(message, tone = 'info') {
   if (!elements.videoStatus) return;
   elements.videoStatus.textContent = message;
   elements.videoStatus.dataset.state = tone;
+}
+
+function showUploadProgress() {
+  if (!elements.uploadProgress) return;
+  elements.uploadProgress.hidden = false;
+  setUploadProgress(0, 0, 0);
+}
+
+function hideUploadProgress(delay = 0) {
+  if (!elements.uploadProgress) return;
+  const performHide = () => {
+    elements.uploadProgress.hidden = true;
+    if (elements.uploadProgressFill) {
+      elements.uploadProgressFill.style.width = '0%';
+    }
+    if (elements.uploadProgressLabel) {
+      elements.uploadProgressLabel.textContent = '0%';
+    }
+  };
+  if (delay > 0) {
+    window.setTimeout(performHide, delay);
+  } else {
+    performHide();
+  }
+}
+
+function setUploadProgress(percent, loaded, total) {
+  if (!elements.uploadProgress) return;
+  const clamped = clamp(Number(percent) || 0, 0, 100);
+  if (elements.uploadProgressFill) {
+    elements.uploadProgressFill.style.width = `${clamped}%`;
+  }
+  if (elements.uploadProgressLabel) {
+    const sizeLabel = total ? formatFileSize(total) : '';
+    const loadedLabel = total ? formatFileSize(loaded) : '';
+    const progressText = total
+      ? `${clamped.toFixed(0)}% (${loadedLabel} / ${sizeLabel})`
+      : `${clamped.toFixed(0)}%`;
+    elements.uploadProgressLabel.textContent = progressText;
+  }
 }
 
 function updateVideoAccess() {
@@ -444,9 +535,10 @@ function renderVideoLibrary(items = []) {
 
     const meta = document.createElement('span');
     meta.className = 'video-meta';
+    const statusLabel = formatVideoStatusLabel(item.status || item.transcodeStatus);
     const sizeLabel = formatFileSize(item.size);
     const timeLabel = formatTimestamp(item.lastModified);
-    meta.textContent = [sizeLabel, timeLabel].filter(Boolean).join(' - ');
+    meta.textContent = [statusLabel, sizeLabel, timeLabel].filter(Boolean).join(' • ');
 
     button.appendChild(title);
     if (meta.textContent) {
@@ -506,21 +598,21 @@ async function refreshVideoLibrary(showBusy = false) {
   }
 }
 
-async function uploadVideo(file) {
-  const presignResponse = await fetch('/api/videos/presign', {
+async function uploadVideo(file, { onProgress } = {}) {
+  const initResponse = await fetch('/api/videos/multipart/init', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      originalName: file.name,
-      contentType: file.type,
+      filename: file.name,
+      mimeType: file.type,
       sizeBytes: file.size,
     }),
   });
 
-  if (!presignResponse.ok) {
+  if (!initResponse.ok) {
     let message = 'Failed to start upload.';
     try {
-      const data = await presignResponse.json();
+      const data = await initResponse.json();
       if (data && data.message) message = data.message;
     } catch {
       // ignore
@@ -528,34 +620,116 @@ async function uploadVideo(file) {
     throw new Error(message);
   }
 
-  const presignData = await presignResponse.json();
-  if (!presignData || !presignData.uploadUrl || !presignData.videoId) {
-    throw new Error('Upload signature response is invalid.');
+  const initData = await initResponse.json();
+  if (!initData || !initData.videoId || !initData.partSizeBytes) {
+    throw new Error('Upload initialisation response is invalid.');
   }
 
-  const uploadHeaders = new Headers(presignData.headers || {});
-  if (file.type && !uploadHeaders.has('Content-Type')) {
-    uploadHeaders.set('Content-Type', file.type);
-  }
+  const partSize = Number(initData.partSizeBytes) || file.size || 1;
+  const totalParts = Math.max(1, Math.ceil(file.size / partSize));
+  let uploadedBytes = 0;
+  const uploadContentType =
+    initData.mimeType || file.type || 'application/octet-stream';
+  const pendingParts = Array.from({ length: totalParts }, (_, index) => index + 1);
+  const maxConcurrency = Math.min(4, pendingParts.length || 1);
+  const partProgress = new Map();
 
-  const uploadResponse = await fetch(presignData.uploadUrl, {
-    method: 'PUT',
-    headers: uploadHeaders,
-    body: file,
+  const emitCombinedProgress = () => {
+    if (typeof onProgress !== 'function') return;
+    const partialBytes = Array.from(partProgress.values()).reduce(
+      (sum, value) => sum + value,
+      0,
+    );
+    const totalLoaded = uploadedBytes + partialBytes;
+    const percent = file.size ? (totalLoaded / file.size) * 100 : 0;
+    onProgress(percent, totalLoaded, file.size);
+  };
+
+  const fetchPartUrl = async (partNumber) => {
+    const response = await fetch('/api/videos/multipart/part-url', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        videoId: initData.videoId,
+        partNumber,
+      }),
+    });
+
+    if (!response.ok) {
+      let message = `Failed to obtain URL for part ${partNumber}.`;
+      try {
+        const data = await response.json();
+        if (data && data.message) message = data.message;
+      } catch {
+        // ignore
+      }
+      throw new Error(message);
+    }
+
+    const payload = await response.json();
+    if (!payload || !payload.uploadUrl) {
+      throw new Error(`Upload URL missing for part ${partNumber}.`);
+    }
+    return payload.uploadUrl;
+  };
+
+  const uploadPart = async (partNumber) => {
+    const start = (partNumber - 1) * partSize;
+    const end = Math.min(start + partSize, file.size);
+    const chunk = file.slice(start, end);
+    const uploadUrl = await fetchPartUrl(partNumber);
+
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open('PUT', uploadUrl, true);
+      if (uploadContentType) {
+        xhr.setRequestHeader('Content-Type', uploadContentType);
+      }
+      xhr.upload.onprogress = (event) => {
+        if (!event.lengthComputable) {
+          partProgress.set(partNumber, event.loaded || 0);
+        } else {
+          partProgress.set(partNumber, Math.min(event.loaded, chunk.size));
+        }
+        emitCombinedProgress();
+      };
+      xhr.onload = () => {
+        partProgress.delete(partNumber);
+        if (xhr.status >= 200 && xhr.status < 300) {
+          uploadedBytes += chunk.size;
+          emitCombinedProgress();
+          resolve();
+        } else {
+          const message =
+            xhr.responseText ||
+            `Upload to OSS failed with status ${xhr.status}`;
+          reject(new Error(message));
+        }
+      };
+      xhr.onerror = () => {
+        partProgress.delete(partNumber);
+        reject(new Error('Network error during upload.'));
+      };
+      xhr.send(chunk);
+    });
+  };
+
+  const workers = Array.from({ length: maxConcurrency }, async () => {
+    while (pendingParts.length) {
+      const partNumber = pendingParts.shift();
+      if (typeof partNumber !== 'number') break;
+      await uploadPart(partNumber);
+    }
   });
 
-  if (!uploadResponse.ok) {
-    let errorText = 'Upload to OSS failed.';
-    try {
-      errorText = await uploadResponse.text();
-    } catch {
-      // ignore parse failure
-    }
-    throw new Error(errorText || 'Upload to OSS failed.');
-  }
+  await Promise.all(workers);
 
-  const finalizeResponse = await fetch(`/api/videos/${presignData.videoId}/complete`, {
+  const finalizeResponse = await fetch('/api/videos/multipart/complete', {
     method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      videoId: initData.videoId,
+    }),
   });
 
   if (!finalizeResponse.ok) {
@@ -637,22 +811,40 @@ elements.uploadVideoButton.addEventListener('click', async () => {
     return;
   }
 
+  let uploadSucceeded = false;
   try {
     elements.uploadVideoButton.disabled = true;
     elements.videoFileInput.disabled = true;
     showVideoStatus(`Uploading ${file.name}...`, 'info');
+    showUploadProgress();
 
-    const data = await uploadVideo(file);
+    const data = await uploadVideo(file, {
+      onProgress: (percent, loaded, total) => {
+        setUploadProgress(percent, loaded, total);
+      },
+    });
+    setUploadProgress(100, file.size, file.size);
+    uploadSucceeded = true;
     await refreshVideoLibrary();
     elements.videoFileInput.value = '';
-    showVideoStatus(`Uploaded: ${data.originalName}`, 'success');
-    socket.emit('set-video', { videoId: data.videoId, startTime: 0 });
+    if (data && data.status === 'processing') {
+      showVideoStatus(
+        `Upload finished. Transcoding started for ${data.originalName || 'video'}.`,
+        'info',
+      );
+    } else {
+      showVideoStatus(`Uploaded: ${data.originalName}`, 'success');
+    }
+    if (data && data.videoId) {
+      socket.emit('set-video', { videoId: data.videoId, startTime: 0 });
+    }
   } catch (error) {
     showVideoStatus(error.message || 'Upload failed.', 'error');
     console.error('Upload failed', error);
   } finally {
     elements.uploadVideoButton.disabled = !isHost;
     elements.videoFileInput.disabled = !isHost;
+    hideUploadProgress(uploadSucceeded ? 800 : 0);
   }
 });
 

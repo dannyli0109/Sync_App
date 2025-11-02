@@ -225,6 +225,40 @@ input[type="file"]::file-selector-button:disabled {
   transform: none;
 }
 
+.upload-progress {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.upload-progress[hidden] {
+  display: none;
+}
+
+.progress-bar {
+  flex: 1;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(244, 244, 247, 0.18);
+  overflow: hidden;
+  position: relative;
+}
+
+.progress-bar-fill {
+  position: absolute;
+  inset: 0;
+  width: 0%;
+  background: linear-gradient(135deg, #81f5ff 0%, #6c8cff 100%);
+  transition: width 0.2s ease;
+}
+
+.progress-label {
+  font-size: 0.85rem;
+  color: rgba(244, 244, 247, 0.78);
+  min-width: 42px;
+  text-align: right;
+}
+
 @keyframes shake {
   0%,
   100% {

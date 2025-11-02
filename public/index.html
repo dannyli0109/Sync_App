@@ -52,6 +52,12 @@
           <input type="file" id="videoFileInput" accept="video/*" />
           <button id="uploadVideoButton">Upload &amp; Share</button>
         </div>
+        <div class="upload-progress" id="uploadProgress" hidden>
+          <div class="progress-bar">
+            <div class="progress-bar-fill" id="uploadProgressFill"></div>
+          </div>
+          <span class="progress-label" id="uploadProgressLabel">0%</span>
+        </div>
         <p class="hint" id="videoStatus" data-state="info">No video loaded yet.</p>
         <p class="hint" id="hostHint">Only the host can upload and control playback.</p>
       </section>
