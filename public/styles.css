@@ -90,10 +90,20 @@ body {
   transition: border-color 0.2s ease, transform 0.2s ease, background 0.2s ease;
 }
 
+.video-item.external {
+  border-color: rgba(129, 245, 255, 0.28);
+  background: rgba(60, 82, 132, 0.18);
+}
+
 .video-item.active {
   border-color: rgba(129, 245, 255, 0.55);
   background: rgba(108, 140, 255, 0.18);
   transform: translateY(-1px);
+}
+
+.video-item.external.active {
+  border-color: rgba(129, 245, 255, 0.68);
+  background: rgba(108, 140, 255, 0.24);
 }
 
 .video-select {
@@ -162,7 +172,8 @@ body {
   gap: 8px;
 }
 
-input[type="text"] {
+input[type="text"],
+input[type="url"] {
   padding: 10px 14px;
   border-radius: 10px;
   border: 1px solid rgba(255, 255, 255, 0.09);
@@ -233,6 +244,34 @@ input[type="file"]::file-selector-button:disabled {
 
 .upload-progress[hidden] {
   display: none;
+}
+
+.link-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.link-controls label {
+  font-weight: 600;
+}
+
+.url-input {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+.url-input input[type="url"],
+.url-input input[type="text"] {
+  flex: 1 1 220px;
+}
+
+.url-input button {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 
 .progress-bar {
@@ -383,6 +422,11 @@ button:disabled {
   color: rgba(255, 255, 255, 0.6);
 }
 
+.hint.small {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.5);
+}
+
 .hint[data-state="success"] {
   color: rgba(129, 245, 255, 0.88);
 }
@@ -417,6 +461,15 @@ button:disabled {
 
   .room-form .inline {
     flex-direction: column;
+  }
+
+  .url-input {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .url-input button {
+    width: 100%;
   }
 
   .player-section {

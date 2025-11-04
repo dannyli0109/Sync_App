@@ -22,6 +22,9 @@ const elements = {
   uploadProgress: document.getElementById('uploadProgress'),
   uploadProgressFill: document.getElementById('uploadProgressFill'),
   uploadProgressLabel: document.getElementById('uploadProgressLabel'),
+  addExternalVideoButton: document.getElementById('addExternalVideoButton'),
+  externalUrlInput: document.getElementById('externalUrlInput'),
+  externalNameInput: document.getElementById('externalNameInput'),
 };
 
 const socket = io();
@@ -107,6 +110,15 @@ function setRole(hostId) {
   elements.takeHostButton.disabled = isHost;
   elements.uploadVideoButton.disabled = !isHost;
   elements.videoFileInput.disabled = !isHost;
+  if (elements.addExternalVideoButton) {
+    elements.addExternalVideoButton.disabled = !isHost;
+  }
+  if (elements.externalUrlInput) {
+    elements.externalUrlInput.disabled = !isHost;
+  }
+  if (elements.externalNameInput) {
+    elements.externalNameInput.disabled = !isHost;
+  }
   elements.hostHint.textContent = isHost
     ? 'You are the host. Upload a video and control playback for everyone.'
     : 'You are a viewer. Ask for host or take control to manage playback.';
@@ -162,6 +174,7 @@ function ensureVideoElement() {
   const video = document.createElement('video');
   video.className = 'watch-video';
   video.controls = true;
+  video.crossOrigin = 'anonymous';
   video.playsInline = true;
   video.preload = 'auto';
   elements.playerContainer.appendChild(video);
@@ -355,7 +368,35 @@ function loadVideo(state, options = {}) {
     suppressHostEmission = false;
     ignoreViewerEvents = false;
     video.removeEventListener('loadedmetadata', handleReady);
-    showVideoStatus('Failed to load the video stream.', 'error');
+    const mediaError = video.error;
+    let message = 'Failed to load the video stream.';
+    if (mediaError) {
+      switch (mediaError.code) {
+        case 1:
+          message = 'Video load was aborted.';
+          break;
+        case 2:
+          message = 'Network error while streaming the video.';
+          break;
+        case 3:
+          message = 'Browser could not decode this video format.';
+          break;
+        case 4:
+          message =
+            'Video source is not supported. Check if the link points directly to an MP4/HLS stream and allows cross-origin access.';
+          break;
+        default:
+          message = `Video failed with error code ${mediaError.code}.`;
+          break;
+      }
+    }
+    showVideoStatus(message, 'error');
+    console.error('Video playback error', {
+      videoId: state.videoId,
+      source: state.source,
+      url: sourceUrl,
+      error: mediaError ? { code: mediaError.code, message: mediaError.message } : null,
+    });
   };
 
   video.addEventListener('loadedmetadata', handleReady, { once: true });
@@ -373,8 +414,23 @@ function loadVideo(state, options = {}) {
       : state.status === 'ready'
       ? 'success'
       : 'info';
-  if (statusLabel) {
-    showVideoStatus(`Now playing: ${label} (${statusLabel})`, tone);
+  let sourceLabel = '';
+  switch (state.source) {
+    case 'external':
+      sourceLabel = 'External link';
+      break;
+    case 'transcoded':
+      sourceLabel = 'Transcoded';
+      break;
+    case 'original':
+      sourceLabel = 'Original file';
+      break;
+    default:
+      sourceLabel = '';
+  }
+  const badges = [sourceLabel, statusLabel].filter(Boolean).join(', ');
+  if (badges) {
+    showVideoStatus(`Now playing: ${label} (${badges})`, tone);
   } else {
     showVideoStatus(`Now playing: ${label}`, 'success');
   }
@@ -509,7 +565,7 @@ function renderVideoLibrary(items = []) {
     elements.libraryStatus.dataset.state = libraryLoading ? 'info' : 'info';
     elements.libraryStatus.textContent = libraryLoading
       ? 'Loading videos...'
-      : 'No videos uploaded yet.';
+      : 'No videos or links yet.';
     highlightSelectedVideo();
     return;
   }
@@ -522,6 +578,9 @@ function renderVideoLibrary(items = []) {
     const listItem = document.createElement('li');
     listItem.className = 'video-item';
     listItem.dataset.videoId = item.videoId;
+    if (item.type === 'external') {
+      listItem.classList.add('external');
+    }
 
     const button = document.createElement('button');
     button.type = 'button';
@@ -538,7 +597,9 @@ function renderVideoLibrary(items = []) {
     const statusLabel = formatVideoStatusLabel(item.status || item.transcodeStatus);
     const sizeLabel = formatFileSize(item.size);
     const timeLabel = formatTimestamp(item.lastModified);
-    meta.textContent = [statusLabel, sizeLabel, timeLabel].filter(Boolean).join(' • ');
+    const sourceLabel = item.type === 'external' ? 'External link' : '';
+    const details = [sourceLabel, statusLabel, sizeLabel, timeLabel].filter(Boolean);
+    meta.textContent = details.join(' | ');
 
     button.appendChild(title);
     if (meta.textContent) {
@@ -581,7 +642,7 @@ async function refreshVideoLibrary(showBusy = false) {
       if (!items.length) {
         elements.libraryStatus.hidden = false;
         elements.libraryStatus.dataset.state = 'info';
-        elements.libraryStatus.textContent = 'No videos uploaded yet.';
+        elements.libraryStatus.textContent = 'No videos or links yet.';
       } else {
         elements.libraryStatus.hidden = true;
       }
@@ -596,6 +657,30 @@ async function refreshVideoLibrary(showBusy = false) {
   } finally {
     libraryLoading = false;
   }
+}
+
+async function createExternalVideo({ url, name }) {
+  const response = await fetch('/api/videos/external', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      url,
+      name,
+    }),
+  });
+
+  if (!response.ok) {
+    let message = 'Failed to add video link.';
+    try {
+      const data = await response.json();
+      if (data && data.message) message = data.message;
+    } catch {
+      // ignore
+    }
+    throw new Error(message);
+  }
+
+  return response.json();
 }
 
 async function uploadVideo(file, { onProgress } = {}) {
@@ -851,6 +936,97 @@ elements.uploadVideoButton.addEventListener('click', async () => {
 elements.refreshLibraryButton.addEventListener('click', () => {
   refreshVideoLibrary(true);
 });
+
+elements.addExternalVideoButton.addEventListener('click', async () => {
+  if (!isHost) return;
+
+  const urlField = elements.externalUrlInput;
+  const nameField = elements.externalNameInput;
+  const rawUrl = urlField && typeof urlField.value === 'string' ? urlField.value.trim() : '';
+  const rawName =
+    nameField && typeof nameField.value === 'string' ? nameField.value.trim() : '';
+
+  if (!rawUrl) {
+    showVideoStatus('Paste a direct video link first.', 'error');
+    if (urlField) {
+      urlField.focus();
+    }
+    return;
+  }
+
+  if (!/^https?:\/\//i.test(rawUrl)) {
+    showVideoStatus('Only http(s) video links are supported.', 'error');
+    if (urlField) {
+      urlField.focus();
+      urlField.select();
+    }
+    return;
+  }
+
+  try {
+    if (elements.addExternalVideoButton) {
+      elements.addExternalVideoButton.disabled = true;
+    }
+    if (urlField) {
+      urlField.disabled = true;
+    }
+    if (nameField) {
+      nameField.disabled = true;
+    }
+
+    showVideoStatus('Adding shared link...', 'info');
+    const data = await createExternalVideo({
+      url: rawUrl,
+      name: rawName || undefined,
+    });
+    await refreshVideoLibrary(true);
+    if (urlField) {
+      urlField.value = '';
+    }
+    if (nameField) {
+      nameField.value = '';
+    }
+    if (data && data.originalName) {
+      showVideoStatus(`Link added: ${data.originalName}`, 'success');
+    } else {
+      showVideoStatus('Link added.', 'success');
+    }
+    if (data && data.videoId) {
+      socket.emit('set-video', { videoId: data.videoId, startTime: 0 });
+    }
+  } catch (error) {
+    showVideoStatus(error.message || 'Unable to add video link.', 'error');
+    console.error('Add external video failed', error);
+  } finally {
+    if (urlField) {
+      urlField.disabled = !isHost;
+    }
+    if (nameField) {
+      nameField.disabled = !isHost;
+    }
+    if (elements.addExternalVideoButton) {
+      elements.addExternalVideoButton.disabled = !isHost;
+    }
+  }
+});
+
+if (elements.externalUrlInput) {
+  elements.externalUrlInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      elements.addExternalVideoButton?.click();
+    }
+  });
+}
+
+if (elements.externalNameInput) {
+  elements.externalNameInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault();
+      elements.addExternalVideoButton?.click();
+    }
+  });
+}
 
 elements.videoList.addEventListener('click', (event) => {
   const button = event.target.closest('.video-select');

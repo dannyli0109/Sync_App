@@ -189,6 +189,47 @@ function sanitizeFilename(name) {
     .slice(-180) || 'video';
 }
 
+function cleanDisplayName(name, fallback) {
+  if (typeof name === 'string') {
+    const trimmed = name.trim();
+    if (trimmed) {
+      return trimmed.slice(0, 180);
+    }
+  }
+  return fallback;
+}
+
+function isValidHttpUrl(value) {
+  if (!value || typeof value !== 'string') {
+    return false;
+  }
+  try {
+    const parsed = new URL(value.trim());
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function inferDisplayNameFromUrl(value) {
+  if (!value) return 'Shared video';
+  try {
+    const parsed = new URL(value);
+    const segments = parsed.pathname.split('/').filter(Boolean);
+    let candidate = segments.pop() || parsed.hostname || value;
+    candidate = candidate.replace(/[?#].*$/, '');
+    try {
+      candidate = decodeURIComponent(candidate);
+    } catch {
+      // ignore decode issues
+    }
+    const cleaned = cleanDisplayName(candidate, parsed.hostname || 'Shared video');
+    return cleaned || 'Shared video';
+  } catch {
+    return 'Shared video';
+  }
+}
+
 function buildObjectKey(videoId, originalName) {
   const cleaned = sanitizeFilename(originalName);
   return `${OSS_VIDEO_PREFIX}${videoId}/${cleaned}`;
@@ -233,6 +274,23 @@ async function createPlaybackUrl(objectKey) {
   return { url, expiresAt };
 }
 
+async function resolvePlaybackForRecord(record) {
+  if (!record) {
+    throw new Error('Video record is required for playback');
+  }
+  if (record.type === 'external') {
+    if (!record.externalUrl) {
+      throw new Error('External video URL is missing');
+    }
+    return { url: record.externalUrl, expiresAt: null };
+  }
+  const ossKey = record.playbackKey || record.objectKey;
+  if (!ossKey) {
+    throw new Error('Playback key is missing for this video');
+  }
+  return createPlaybackUrl(ossKey);
+}
+
 async function ensurePlaybackUrl(state) {
   if (!state || !state.ossKey) {
     return state;
@@ -269,6 +327,13 @@ async function prepareStateForClient(state) {
 
 async function ensureTranscodeAssignment(record) {
   if (!record) return null;
+  if (record.type === 'external') {
+    record.playbackKey = null;
+    if (!record.status || record.status === 'uploading') {
+      record.status = 'ready';
+    }
+    return record;
+  }
   if (!isMpsConfigured() || !record.transcodeTargetKey) {
     record.playbackKey = record.objectKey;
     if (record.status !== 'error') {
@@ -308,12 +373,15 @@ async function resolveVideoRecord(videoId) {
     return null;
   }
 
-  const client = getOssClient();
-  if (!client) {
-    return null;
+  let record = videos.get(videoId);
+  if (record && record.type === 'external') {
+    return record;
   }
 
-  let record = videos.get(videoId);
+  const client = getOssClient();
+  if (!client) {
+    return record || null;
+  }
 
   try {
     if (!record) {
@@ -710,14 +778,83 @@ app.post('/api/videos/multipart/complete', async (req, res) => {
   }
 });
 
-app.get('/api/videos', async (req, res) => {
-  if (!isOssConfigured()) {
-    return res.json({ items: [] });
+app.post('/api/videos/external', (req, res) => {
+  const { url, name } = req.body || {};
+  if (!isValidHttpUrl(url)) {
+    return res.status(400).json({
+      error: 'InvalidUrl',
+      message: 'A valid http or https URL is required.',
+    });
   }
 
+  const normalizedUrl = url.trim();
+  const now = Date.now();
+  const displayName = cleanDisplayName(
+    name,
+    inferDisplayNameFromUrl(normalizedUrl),
+  );
+
+  const videoId = nanoid(8);
+  const record = {
+    id: videoId,
+    type: 'external',
+    externalUrl: normalizedUrl,
+    originalName: displayName,
+    status: 'ready',
+    size: null,
+    mimeType: null,
+    createdAt: now,
+    lastModified: now,
+    objectKey: null,
+    playbackKey: null,
+  };
+
+  videos.set(videoId, record);
+
+  res.status(201).json({
+    videoId: record.id,
+    originalName: record.originalName,
+    status: record.status,
+    size: record.size,
+    lastModified: record.lastModified,
+    mimeType: record.mimeType,
+    type: 'external',
+    videoUrl: record.externalUrl,
+  });
+});
+
+app.get('/api/videos', async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 100);
-  const client = getOssClient();
   const items = [];
+
+  const externalRecords = Array.from(videos.values())
+    .filter((record) => record?.type === 'external')
+    .sort((a, b) => {
+      const left = Number.isFinite(a?.lastModified) ? a.lastModified : a?.createdAt || 0;
+      const right = Number.isFinite(b?.lastModified) ? b.lastModified : b?.createdAt || 0;
+      return right - left;
+    });
+
+  for (const record of externalRecords) {
+    items.push({
+      videoId: record.id,
+      originalName: record.originalName,
+      size: record.size,
+      lastModified: record.lastModified || record.createdAt,
+      status: record.status || 'ready',
+      transcodeStatus: record.status || 'ready',
+      type: 'external',
+    });
+    if (items.length >= limit) {
+      break;
+    }
+  }
+
+  if (items.length >= limit || !isOssConfigured()) {
+    return res.json({ items });
+  }
+
+  const client = getOssClient();
   let marker;
 
   try {
@@ -750,6 +887,7 @@ app.get('/api/videos', async (req, res) => {
           lastModified: record.lastModified,
           status: record.status,
           transcodeStatus: record.transcodeJob?.state || record.status,
+          type: record.type || 'oss',
         });
         if (items.length >= limit) {
           break;
@@ -772,10 +910,6 @@ app.get('/api/videos', async (req, res) => {
 });
 
 app.get('/api/videos/:id/playback', async (req, res) => {
-  if (!isOssConfigured()) {
-    return respondOssNotConfigured(res);
-  }
-
   const { id } = req.params;
   const record = await resolveVideoRecord(id);
   if (!record) {
@@ -785,9 +919,13 @@ app.get('/api/videos/:id/playback', async (req, res) => {
     });
   }
 
+  if (record.type !== 'external' && !isOssConfigured()) {
+    return respondOssNotConfigured(res);
+  }
+
   try {
     await ensureTranscodeAssignment(record);
-    const playback = await createPlaybackUrl(record.playbackKey || record.objectKey);
+    const playback = await resolvePlaybackForRecord(record);
     record.playbackUrl = playback.url;
     record.playbackExpiresAt = playback.expiresAt;
     videos.set(record.id, record);
@@ -795,13 +933,21 @@ app.get('/api/videos/:id/playback', async (req, res) => {
     res.json({
       videoId: record.id,
       videoUrl: playback.url,
-      expiresAt: new Date(playback.expiresAt).toISOString(),
+      expiresAt: playback.expiresAt
+        ? new Date(playback.expiresAt).toISOString()
+        : null,
       originalName: record.originalName,
       size: record.size,
       mimeType: record.mimeType,
       status: record.status,
       transcodeStatus: record.transcodeJob?.state || record.status,
-      source: record.playbackKey === record.objectKey ? 'original' : 'transcoded',
+      source:
+        record.type === 'external'
+          ? 'external'
+          : record.playbackKey === record.objectKey
+          ? 'original'
+          : 'transcoded',
+      type: record.type || 'oss',
     });
   } catch (error) {
     console.error('Failed to generate playback URL', error);
@@ -813,19 +959,29 @@ app.get('/api/videos/:id/playback', async (req, res) => {
 });
 
 app.get('/api/videos/:id/transcode/status', async (req, res) => {
-  if (!isMpsConfigured()) {
-    return res.status(503).json({
-      error: 'TranscodeDisabled',
-      message: 'Transcoding is not enabled for this deployment.',
-    });
-  }
-
   const { id } = req.params;
   const record = await resolveVideoRecord(id);
   if (!record) {
     return res.status(404).json({
       error: 'VideoNotFound',
       message: 'Video not found.',
+    });
+  }
+
+  if (record.type === 'external') {
+    return res.json({
+      videoId: record.id,
+      status: record.status || 'ready',
+      transcode: null,
+      source: 'external',
+      type: 'external',
+    });
+  }
+
+  if (!isMpsConfigured()) {
+    return res.status(503).json({
+      error: 'TranscodeDisabled',
+      message: 'Transcoding is not enabled for this deployment.',
     });
   }
 
@@ -838,6 +994,7 @@ app.get('/api/videos/:id/transcode/status', async (req, res) => {
     status: record.status,
     transcode: record.transcodeJob || null,
     source: record.playbackKey === record.objectKey ? 'original' : 'transcoded',
+    type: record.type || 'oss',
   });
 });
 
@@ -901,7 +1058,7 @@ io.on('connection', (socket) => {
 
     try {
       await ensureTranscodeAssignment(record);
-      const playback = await createPlaybackUrl(record.playbackKey || record.objectKey);
+      const playback = await resolvePlaybackForRecord(record);
       const now = Date.now();
       room.state = {
         videoId: record.id,
@@ -910,13 +1067,20 @@ io.on('connection', (socket) => {
         size: record.size,
         status: record.status,
         transcodeStatus: record.transcodeJob?.state || record.status,
-        source: record.playbackKey === record.objectKey ? 'original' : 'transcoded',
+        source:
+          record.type === 'external'
+            ? 'external'
+            : record.playbackKey === record.objectKey
+            ? 'original'
+            : 'transcoded',
+        type: record.type || 'oss',
         time: typeof startTime === 'number' ? Math.max(startTime, 0) : 0,
         paused: true,
         playbackRate: 1,
         updatedAt: now,
-        ossKey: record.playbackKey || record.objectKey,
-        playbackExpiresAt: playback.expiresAt,
+        ossKey:
+          record.type === 'external' ? null : record.playbackKey || record.objectKey,
+        playbackExpiresAt: playback.expiresAt || null,
       };
       io.to(socket.data.roomId).emit('load-video', presentState(room.state));
     } catch (error) {

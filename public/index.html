@@ -47,7 +47,7 @@
       </section>
 
       <section class="video-controls" id="videoControls" hidden>
-        <label for="videoFileInput">Upload video (mp4, webm, mov…)</label>
+        <label for="videoFileInput">Upload video (mp4, webm, mov...)</label>
         <div class="inline file-input">
           <input type="file" id="videoFileInput" accept="video/*" />
           <button id="uploadVideoButton">Upload &amp; Share</button>
@@ -57,6 +57,29 @@
             <div class="progress-bar-fill" id="uploadProgressFill"></div>
           </div>
           <span class="progress-label" id="uploadProgressLabel">0%</span>
+        </div>
+        <div class="link-controls">
+          <label for="externalUrlInput">Share a video link</label>
+          <div class="inline url-input">
+            <input
+              type="url"
+              id="externalUrlInput"
+              placeholder="https://example.com/video.mp4"
+              autocomplete="off"
+            />
+            <input
+              type="text"
+              id="externalNameInput"
+              placeholder="Optional name"
+              autocomplete="off"
+              maxlength="180"
+            />
+            <button type="button" id="addExternalVideoButton">Add Link</button>
+          </div>
+          <p class="hint small">
+            Paste a direct http(s) video URL. Works best with MP4, HLS (m3u8), or other streaming
+            links that allow anonymous playback.
+          </p>
         </div>
         <p class="hint" id="videoStatus" data-state="info">No video loaded yet.</p>
         <p class="hint" id="hostHint">Only the host can upload and control playback.</p>
